@@ -17,13 +17,16 @@ import functools
 from opensfm import dataset
 from rasterio.windows import Window
 import cv2
+from math import sqrt
+from skimage.draw import line
 
 #default_dem_path = "odm_dem/dsm.tif"
 default_dem_path = "odm_dem/mesh_dsm.tif"
 default_outdir = "sobel_tests"
 default_image_list = "img_list.txt"
 
-dataset_path = "/datasets/cmparks"
+#dataset_path = "/datasets/cmparks"
+dataset_path = "/datasets/brighton2"
 dem_path = os.path.join(dataset_path, default_dem_path)
 interpolation = "nearest"
 with_alpha = True
@@ -33,10 +36,11 @@ cwd_path = os.path.join(dataset_path, default_outdir)
 if not os.path.exists(cwd_path):
     os.makedirs(cwd_path)
 
-#target_images = ["DJI_0031.JPG.tif"]
 
-with open(image_list) as f:
-    target_images = [img + ".tif" for img in list(filter(lambda filename: filename != '', map(str.strip, f.read().split("\n"))))]
+# with open(image_list) as f:
+#     target_images = [img + ".tif" for img in list(filter(lambda filename: filename != '', map(str.strip, f.read().split("\n"))))]
+target_images = ["DJI_0030.JPG.tif"]
+
 print("Processing %s images" % len(target_images))
 
 if not os.path.exists(dem_path):
@@ -51,11 +55,16 @@ with rasterio.open(dem_path) as dem_raster:
     dem_has_nodata = dem_raster.profile.get('nodata') is not None
 
     if dem_has_nodata:
-        dem_min_value = ma.array(dem, mask=dem==dem_raster.nodata).min()
+        m = ma.array(dem, mask=dem==dem_raster.nodata)
+        dem_min_value = m.min()
+        dem_max_value = m.max()
     else:
         dem_min_value = dem.min()
-    
+        dem_max_value = dem.max()
+
     print("DEM Minimum: %s" % dem_min_value)
+    print("DEM Maximum: %s" % dem_max_value)
+    
     h, w = dem.shape
 
     crs = dem_raster.profile.get('crs')
@@ -103,7 +112,7 @@ with rasterio.open(dem_path) as dem_raster:
             shot_image = udata.load_undistorted_image(shot.id)
             gray_image = shot_image[:,:,2]
             #gray_image = cv2.cvtColor(shot_image, cv2.COLOR_RGB2GRAY)
-            gray_image = cv2.bilateralFilter(gray_image,15,75,75)
+            #gray_image = cv2.bilateralFilter(gray_image,15,75,75)
 
             median = np.median(gray_image)
             sigma = 0.33
@@ -111,6 +120,17 @@ with rasterio.open(dem_path) as dem_raster:
             upper_thresh = int(min(255, (1.0 + sigma) * median))
 
             canny = cv2.Canny(gray_image, lower_thresh, upper_thresh)
+            canny = ndimage.maximum_filter(canny, size=7, mode='nearest')
+
+            import lsd
+            lines = lsd.line_segment_detector(gray_image)
+            line_image = np.copy(gray_image) * 0 
+            for line in lines:
+                x1, y1, x2, y2, cx, cy, l, w = line
+                cv2.line(line_image,(int(x1),int(y1)),(int(x2),int(y2)),(255,0,0), 1)
+
+            cv2.imwrite(os.path.join(cwd_path, "lines.jpg"), line_image)
+            exit(1)
 
             # rho = 1  # distance resolution in pixels of the Hough grid
             # theta = np.pi / 180  # angular resolution in radians of the Hough grid
@@ -130,6 +150,9 @@ with rasterio.open(dem_path) as dem_raster:
             
             r = shot.pose.get_rotation_matrix()
             Xs, Ys, Zs = shot.pose.get_origin()
+            cam_grid_y, cam_grid_x = dem_raster.index(Xs + dem_offset_x, Ys + dem_offset_y)
+
+
             a1 = r[0][0]
             b1 = r[0][1]
             c1 = r[0][2]
@@ -139,6 +162,13 @@ with rasterio.open(dem_path) as dem_raster:
             a3 = r[2][0]
             b3 = r[2][1]
             c3 = r[2][2]
+
+            distance_map = np.full((h, w), np.nan)
+
+            for j in range(0, h):
+                for i in range(0, w):
+                    distance_map[j][i] = sqrt((cam_grid_x - i) ** 2 + (cam_grid_y - j) ** 2)
+            distance_map[distance_map==0] = 1e-7
 
             print("Camera pose: (%f, %f, %f)" % (Xs, Ys, Zs))
 
@@ -184,6 +214,21 @@ with rasterio.open(dem_path) as dem_raster:
                             y = (img_h - 1) / 2.0 - (f * (a2 * dx + b2 * dy + c2 * dz) / den)
 
                             if x >= 0 and y >= 0 and x <= img_w - 1 and y <= img_h - 1:
+                                check_dem_points = np.column_stack(line(i, j, cam_grid_x, cam_grid_y))
+                                check_dem_points = check_dem_points[np.all(np.logical_and(np.array([0, 0]) <= check_dem_points, check_dem_points < [w, h]), axis=1)]
+
+                                visible = True
+                                for p in check_dem_points:
+                                    ray_z = Zs + (distance_map[p[1]][p[0]] / distance_map[j][i]) * dz
+                                    if ray_z > dem_max_value:
+                                        break
+
+                                    if dem[p[1]][p[0]] > ray_z:
+                                        visible = False
+                                        break
+                                if not visible:
+                                    continue
+
                                 # nearest
                                 xi = img_w - 1 - int(round(x))
                                 yi = img_h - 1 - int(round(y))
@@ -268,8 +313,6 @@ with rasterio.open(dem_path) as dem_raster:
             if minx <= maxx and miny <= maxy:
                 imgout = imgout[miny:maxy,minx:maxx]
                 imgout[np.isnan(imgout)] = 0
-
-                imgout = ndimage.maximum_filter(imgout, size=3, mode='nearest')
 
                 canny_dem[dem_bbox_miny + miny:dem_bbox_miny + miny + imgout.shape[0],
                           dem_bbox_minx + minx:dem_bbox_minx + minx + imgout.shape[1]] += imgout
