@@ -18,15 +18,15 @@ from opensfm import dataset
 from rasterio.windows import Window
 import cv2
 from math import sqrt
-from skimage.draw import line
+from skimage.draw import line as draw_line
 
 #default_dem_path = "odm_dem/dsm.tif"
 default_dem_path = "odm_dem/mesh_dsm.tif"
 default_outdir = "sobel_tests"
 default_image_list = "img_list.txt"
 
-#dataset_path = "/datasets/cmparks"
-dataset_path = "/datasets/brighton2"
+dataset_path = "/datasets/cmparks"
+# dataset_path = "/datasets/brighton2"
 dem_path = os.path.join(dataset_path, default_dem_path)
 interpolation = "nearest"
 with_alpha = True
@@ -37,9 +37,9 @@ if not os.path.exists(cwd_path):
     os.makedirs(cwd_path)
 
 
-# with open(image_list) as f:
-#     target_images = [img + ".tif" for img in list(filter(lambda filename: filename != '', map(str.strip, f.read().split("\n"))))]
-target_images = ["DJI_0030.JPG.tif"]
+with open(image_list) as f:
+    target_images = [img + ".tif" for img in list(filter(lambda filename: filename != '', map(str.strip, f.read().split("\n"))))]
+#target_images = ["DJI_0030.JPG.tif"]
 
 print("Processing %s images" % len(target_images))
 
@@ -114,40 +114,24 @@ with rasterio.open(dem_path) as dem_raster:
             #gray_image = cv2.cvtColor(shot_image, cv2.COLOR_RGB2GRAY)
             #gray_image = cv2.bilateralFilter(gray_image,15,75,75)
 
-            median = np.median(gray_image)
-            sigma = 0.33
-            lower_thresh = int(max(0, (1.0 - sigma) * median))
-            upper_thresh = int(min(255, (1.0 + sigma) * median))
+            # median = np.median(gray_image)
+            # sigma = 0.33
+            # lower_thresh = int(max(0, (1.0 - sigma) * median))
+            # upper_thresh = int(min(255, (1.0 + sigma) * median))
 
-            canny = cv2.Canny(gray_image, lower_thresh, upper_thresh)
-            canny = ndimage.maximum_filter(canny, size=7, mode='nearest')
+            # canny = cv2.Canny(gray_image, lower_thresh, upper_thresh)
+            # canny = ndimage.maximum_filter(canny, size=7, mode='nearest')
 
             import lsd
             lines = lsd.line_segment_detector(gray_image)
             line_image = np.copy(gray_image) * 0 
             for line in lines:
-                x1, y1, x2, y2, cx, cy, l, w = line
-                cv2.line(line_image,(int(x1),int(y1)),(int(x2),int(y2)),(255,0,0), 1)
+                x1, y1, x2, y2, cx, cy, l, width = line
+                cv2.line(line_image,(int(x1),int(y1)),(int(x2),int(y2)),(255,0,0), 3)
 
-            cv2.imwrite(os.path.join(cwd_path, "lines.jpg"), line_image)
-            exit(1)
+            # cv2.imwrite(os.path.join(cwd_path, "lines.jpg"), line_image)
+            # exit(1)
 
-            # rho = 1  # distance resolution in pixels of the Hough grid
-            # theta = np.pi / 180  # angular resolution in radians of the Hough grid
-            # threshold = 15  # minimum number of votes (intersections in Hough grid cell)
-            # min_line_length = 20  # minimum number of pixels making up a line
-            # max_line_gap = 20  # maximum gap in pixels between connectable line segments
-            # line_image = np.copy(canny) * 0  # creating a blank to draw lines on
-
-            # # Run Hough on edge detected image
-            # # Output "lines" is an array containing endpoints of detected line segments
-            # lines = cv2.HoughLinesP(canny, rho, theta, threshold, np.array([]),
-            #                     min_line_length, max_line_gap)
-
-            # for line in lines:
-            #     for x1,y1,x2,y2 in line:
-            #         cv2.line(line_image,(x1,y1),(x2,y2),(255,0,0),2)
-            
             r = shot.pose.get_rotation_matrix()
             Xs, Ys, Zs = shot.pose.get_origin()
             cam_grid_y, cam_grid_x = dem_raster.index(Xs + dem_offset_x, Ys + dem_offset_y)
@@ -214,7 +198,7 @@ with rasterio.open(dem_path) as dem_raster:
                             y = (img_h - 1) / 2.0 - (f * (a2 * dx + b2 * dy + c2 * dz) / den)
 
                             if x >= 0 and y >= 0 and x <= img_w - 1 and y <= img_h - 1:
-                                check_dem_points = np.column_stack(line(i, j, cam_grid_x, cam_grid_y))
+                                check_dem_points = np.column_stack(draw_line(i, j, cam_grid_x, cam_grid_y))
                                 check_dem_points = check_dem_points[np.all(np.logical_and(np.array([0, 0]) <= check_dem_points, check_dem_points < [w, h]), axis=1)]
 
                                 visible = True
@@ -232,7 +216,7 @@ with rasterio.open(dem_path) as dem_raster:
                                 # nearest
                                 xi = img_w - 1 - int(round(x))
                                 yi = img_h - 1 - int(round(y))
-                                values = canny[yi][xi]
+                                values = line_image[yi][xi]
 
                                 # We don't consider all zero values (pure black)
                                 # to be valid sample values. This will sometimes miss
@@ -244,7 +228,7 @@ with rasterio.open(dem_path) as dem_raster:
                                     maxx = max(maxx, im_i)
                                     maxy = max(maxy, im_j)
 
-                                    imgout[im_j][im_i] = 0 if canny[yi][xi] == 0 else 1
+                                    imgout[im_j][im_i] = 0 if line_image[yi][xi] == 0 else 1
                 return (imgout, (minx, miny, maxx, maxy))
 
             # Compute bounding box of image coverage
